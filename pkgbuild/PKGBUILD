@@ -1,17 +1,31 @@
-# Maintainer: David Heinemeier Hansson <david@hey.com>
+# Maintainer: Son (local fork, not upstream)
+# Fork of omacom-io/omawrite — adds vault, wikilinks, link graph, quick switcher.
+# Packaged under a distinct pkgname so `pacman -Syu` / omarchy-update cannot
+# silently replace this build with the stock `omawrite` package: this package
+# Conflicts/Provides/Replaces the upstream name, so pacman treats upstream
+# `omawrite` as already satisfied by this package and will not reinstall it
+# alongside or over it. See the "Fork maintenance" section in ../README.md
+# for the rebase-on-upstream loop.
 
-pkgname=omawrite
-pkgver=0.1.0
+pkgname=omawrite-son
+pkgver=0.6.0.7.g20426c8
 pkgrel=1
-pkgdesc='Dead-simple Markdown writing app built with Qt Quick'
+pkgdesc="Dead-simple Markdown writing app built with Qt Quick (Son's fork: vault, wikilinks, link graph, quick switcher)"
 arch=('x86_64')
 url='https://github.com/omacom-io/omawrite'
 license=('MIT')
 install='omawrite.install'
 depends=('qt6-base' 'qt6-declarative' 'xdg-desktop-portal')
 makedepends=('gcc' 'make' 'qt6-base' 'qt6-declarative')
+provides=('omawrite')
+conflicts=('omawrite')
 source=()
 sha256sums=()
+
+pkgver() {
+  cd "$startdir/.."
+  git describe --long --tags 2>/dev/null | sed 's/^v//;s/-/./g'
+}
 
 build() {
   cd "$startdir/.."

@@ -53,3 +53,57 @@ Omawrite at the size it is designed around; larger and smaller sizes scale from 
 
 The IBM Plex Mono font is bundled under the SIL Open Font License 1.1; see
 `fonts/OFL.txt`. The font is copyright IBM Corp.
+
+## Fork maintenance
+
+This checkout is a fork of upstream `omacom-io/omawrite` carrying local
+features (vault, wikilinks, link graph, quick switcher) not yet upstream.
+The machine also has upstream `omawrite` available from the `omarchy`
+pacman repo, and `omarchy-update` / `pacman -Syu` will try to keep that
+package current. To stop an update from silently overwriting this fork's
+binary at `/usr/bin/omawrite`, this fork is packaged under a **different
+pacman package name**, `omawrite-son`, built from `pkgbuild/PKGBUILD`:
+
+- `pkgname=omawrite-son` — a distinct package pacman tracks independently
+  from upstream `omawrite`.
+- `provides=('omawrite')` and `conflicts=('omawrite')` — pacman treats
+  `omawrite-son` as satisfying anything that depends on `omawrite`, and
+  will refuse to have both installed at once. Exactly one of
+  upstream `omawrite` or this fork's `omawrite-son` owns `/usr/bin/omawrite`
+  at a time; pacman enforces that, not a hand install.
+- A plain `pacman -Syu` only touches packages pacman knows about by name.
+  Because this fork is a different name, `omarchy-update` reinstalling or
+  upgrading upstream `omawrite` is a normal, uneventful transaction for
+  pacman — it does not touch `omawrite-son`, and it does not get to put
+  its binary back at `/usr/bin/omawrite` while `omawrite-son` is installed
+  and has not been removed (the conflict would require explicit
+  `pacman -S omawrite`, which prompts to remove `omawrite-son` first).
+- This is deliberately **reversible**: `pacman -R omawrite-son` fully
+  uninstalls the fork and leaves the box exactly as if upstream `omawrite`
+  were reinstalled fresh. An epoch-bump approach (same pkgname, higher
+  epoch) was considered and rejected — it would re-fight the upstream
+  repo's version on every sync instead of just existing as its own package.
+
+### Rebase-on-upstream loop
+
+1. Add/update the upstream remote and fetch:
+   `git remote add upstream https://github.com/omacom-io/omawrite.git` (once),
+   then `git fetch upstream`.
+2. Rebase local feature work onto upstream's latest tag/branch:
+   `git rebase upstream/main` (resolve conflicts commit by commit — local
+   features touch `src/backend.*`, `src/linkindex.*`, QML files, and
+   `pkgbuild/`; upstream changes to the same files are the usual conflict
+   source).
+3. Re-run the test suite (`./bin/test`) and the build (`./bin/build`)
+   before repackaging.
+4. Rebuild the package: `cd pkgbuild && makepkg -f`. `pkgver()` derives the
+   version from `git describe --long --tags`, so it updates automatically
+   once the rebase picks up new upstream tags.
+5. Install the new build to replace the previous `omawrite-son`:
+   `sudo pacman -U pkgbuild/omawrite-son-<version>-x86_64.pkg.tar.zst`
+   (upgrading `omawrite-son` in place; no `-R`/`-S` dance needed since it's
+   the same package name across rebuilds).
+6. Verify: `pacman -Qo $(which omawrite)` should still report
+   `omawrite-son`, and `which omawrite` should resolve to `/usr/bin/omawrite`
+   with the rebuilt binary (check `omawrite --version`-equivalent behavior
+   or just confirm the new features run).
