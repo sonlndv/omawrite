@@ -660,6 +660,9 @@ void Backend::saveTo(const QUrl &url) {
     clearRecovery();
     emit saveSucceeded();
 
+    if (isInsideVault(url.toLocalFile()))
+        rebuildLinkIndex();
+
     if (shouldClose)
         emit closeAfterSave();
 }
@@ -908,6 +911,28 @@ void Backend::rescanVault() {
         }
     }
     rebuildVaultEntries();
+    rebuildLinkIndex();
+}
+
+void Backend::rebuildLinkIndex() {
+    QStringList filePaths;
+    for (auto it = m_vaultPaths.constBegin(); it != m_vaultPaths.constEnd(); ++it) {
+        if (!it.value()) // directories are not link targets
+            filePaths.append(it.key());
+    }
+    m_linkIndex.rebuild(m_vaultRoot, filePaths);
+    emit linkGraphChanged();
+}
+
+QStringList Backend::linkIndexForwardTargets(const QString &relativePath) const {
+    QStringList targets;
+    for (const LinkIndex::Link &link : m_linkIndex.forwardLinks(relativePath))
+        targets.append(link.resolvedPath.isEmpty() ? link.rawTarget : link.resolvedPath);
+    return targets;
+}
+
+QStringList Backend::linkIndexBacklinks(const QString &relativePath) const {
+    return m_linkIndex.backlinks(relativePath);
 }
 
 // Re-reads one watched directory and folds in what changed: new files/folders
@@ -923,6 +948,7 @@ void Backend::syncVaultDirectory(const QString &absoluteDirPath) {
         if (!dirRelative.isEmpty())
             removeVaultSubtree(dirRelative);
         rebuildVaultEntries();
+        rebuildLinkIndex();
         return;
     }
 
@@ -955,6 +981,7 @@ void Backend::syncVaultDirectory(const QString &absoluteDirPath) {
 
     watchVaultDirectories();
     rebuildVaultEntries();
+    rebuildLinkIndex();
 }
 
 void Backend::scanNewVaultDirectory(const QString &relativePath) {

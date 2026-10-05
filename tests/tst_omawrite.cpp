@@ -1,4 +1,5 @@
 #include <QtTest>
+#include <QElapsedTimer>
 #include <QFont>
 #include <QQmlComponent>
 #include <QQmlContext>
@@ -428,6 +429,129 @@ private slots:
         fallbackDocument.saveAsDialog();
         const QUrl fallbackUrl = fallbackDialogSpy.takeFirst().constFirst().toUrl();
         QCOMPARE(QFileInfo(fallbackUrl.toLocalFile()).absolutePath(), QDir::homePath());
+    }
+
+    void buildsLinkIndexForwardAndReverseMapsFromDisk() {
+        QTemporaryDir vaultParent;
+        QVERIFY(vaultParent.isValid());
+        const QString vaultPath = vaultParent.filePath(QStringLiteral("vault"));
+
+        Backend backend;
+        backend.setVaultRoot(QUrl::fromLocalFile(vaultPath));
+
+        QVERIFY(backend.createVaultNote(QString(), QStringLiteral("Hub")));
+        QVERIFY(backend.createVaultNote(QString(), QStringLiteral("Target")));
+        QVERIFY(backend.createVaultFolder(QString(), QStringLiteral("Sub")));
+        QVERIFY(backend.createVaultNote(QStringLiteral("Sub"), QStringLiteral("Deep Target")));
+
+        // Hub links to an aliased target, a nested target, and a target that
+        // does not exist anywhere in the vault.
+        QFile hub(QDir(vaultPath).filePath(QStringLiteral("Hub.md")));
+        QVERIFY(hub.open(QIODevice::WriteOnly | QIODevice::Text));
+        hub.write("See [[Target|the target]] and [[Deep Target]] and [[Nowhere]].");
+        hub.close();
+
+        backend.open(QUrl::fromLocalFile(hub.fileName()));
+        backend.rescanVaultForTest();
+
+        const QStringList forward = backend.linkIndexForwardTargets(QStringLiteral("Hub.md"));
+        QCOMPARE(forward.size(), 3);
+        QVERIFY(forward.contains(QStringLiteral("Target.md")));
+        QVERIFY(forward.contains(QStringLiteral("Sub/Deep Target.md")));
+        QVERIFY(forward.contains(QStringLiteral("Nowhere"))); // broken link reports raw target
+
+        QCOMPARE(backend.linkIndexBacklinks(QStringLiteral("Target.md")),
+                 QStringList{QStringLiteral("Hub.md")});
+        QCOMPARE(backend.linkIndexBacklinks(QStringLiteral("Sub/Deep Target.md")),
+                 QStringList{QStringLiteral("Hub.md")});
+        QVERIFY(backend.linkIndexBacklinks(QStringLiteral("Nowhere")).isEmpty());
+
+        const QVariantList graph = backend.linkGraph();
+        QCOMPARE(graph.size(), 3);
+        bool sawBroken = false;
+        for (const QVariant &edge : graph) {
+            const QVariantMap map = edge.toMap();
+            if (map.value(QStringLiteral("rawTarget")).toString() == QStringLiteral("Nowhere"))
+                sawBroken = map.value(QStringLiteral("broken")).toBool();
+        }
+        QVERIFY(sawBroken);
+    }
+
+    void updatesLinkIndexOnSave() {
+        QTemporaryDir vaultParent;
+        QVERIFY(vaultParent.isValid());
+        const QString vaultPath = vaultParent.filePath(QStringLiteral("vault"));
+
+        const QString mainQmlPath = QFINDTESTDATA(QStringLiteral("../src/Main.qml"));
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        backend.setVaultRoot(QUrl::fromLocalFile(vaultPath));
+
+        QVERIFY(backend.createVaultNote(QString(), QStringLiteral("A")));
+        QVERIFY(backend.createVaultNote(QString(), QStringLiteral("B")));
+        QVERIFY(backend.createVaultNote(QString(), QStringLiteral("C")));
+
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+
+        backend.open(QUrl::fromLocalFile(QDir(vaultPath).filePath(QStringLiteral("A.md"))));
+        QVERIFY(backend.linkIndexForwardTargets(QStringLiteral("A.md")).isEmpty());
+
+        editor->setProperty("text", QStringLiteral("Links to [[B]]."));
+        backend.editorTextChanged();
+        backend.save();
+
+        QCOMPARE(backend.linkIndexForwardTargets(QStringLiteral("A.md")),
+                 QStringList{QStringLiteral("B.md")});
+        QCOMPARE(backend.linkIndexBacklinks(QStringLiteral("B.md")),
+                 QStringList{QStringLiteral("A.md")});
+        QVERIFY(backend.linkIndexBacklinks(QStringLiteral("C.md")).isEmpty());
+
+        // Editing the link again and saving must drop the old reverse entry
+        // and add the new one -- not accumulate both.
+        editor->setProperty("text", QStringLiteral("Links to [[C]] now."));
+        backend.editorTextChanged();
+        backend.save();
+
+        QCOMPARE(backend.linkIndexForwardTargets(QStringLiteral("A.md")),
+                 QStringList{QStringLiteral("C.md")});
+        QVERIFY(backend.linkIndexBacklinks(QStringLiteral("B.md")).isEmpty());
+        QCOMPARE(backend.linkIndexBacklinks(QStringLiteral("C.md")),
+                 QStringList{QStringLiteral("A.md")});
+    }
+
+    void reportsColdScanTimeForOneThousandNotes() {
+        QTemporaryDir vaultParent;
+        QVERIFY(vaultParent.isValid());
+        const QString vaultPath = vaultParent.filePath(QStringLiteral("vault"));
+        QDir().mkpath(vaultPath);
+
+        for (int i = 0; i < 1000; ++i) {
+            QFile note(QDir(vaultPath).filePath(QStringLiteral("Note %1.md").arg(i)));
+            QVERIFY(note.open(QIODevice::WriteOnly | QIODevice::Text));
+            note.write(QStringLiteral("Links to [[Note %1]] and [[Note %2]].")
+                           .arg((i + 1) % 1000)
+                           .arg((i + 500) % 1000)
+                           .toUtf8());
+            note.close();
+        }
+
+        Backend backend;
+        QElapsedTimer timer;
+        timer.start();
+        backend.setVaultRoot(QUrl::fromLocalFile(vaultPath));
+        const qint64 elapsedMs = timer.elapsed();
+
+        qInfo("Cold scan of 1000 notes (vault scan + link index build): %lld ms", elapsedMs);
+        QCOMPARE(backend.linkIndexForwardTargets(QStringLiteral("Note 0.md")).size(), 2);
     }
 
 private:

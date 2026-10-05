@@ -18,6 +18,8 @@ class QTextDocument;
 class QWindow;
 class QLockFile;
 
+#include "linkindex.h"
+
 class Backend : public QObject {
     Q_OBJECT
     Q_PROPERTY(QUrl fileUrl READ fileUrl NOTIFY fileUrlChanged)
@@ -37,6 +39,7 @@ class Backend : public QObject {
     Q_PROPERTY(bool vaultVisible READ vaultVisible WRITE setVaultVisible NOTIFY vaultVisibleChanged)
     Q_PROPERTY(QVariantList vaultEntries READ vaultEntries NOTIFY vaultEntriesChanged)
     Q_PROPERTY(QString currentVaultRelativePath READ currentVaultRelativePath NOTIFY fileUrlChanged)
+    Q_PROPERTY(QVariantList linkGraph READ linkGraph NOTIFY linkGraphChanged)
 
 public:
     explicit Backend(QObject *parent = nullptr);
@@ -106,10 +109,15 @@ public:
     Q_INVOKABLE bool renameVaultEntry(const QString &relativePath, const QString &newName);
     Q_INVOKABLE bool deleteVaultEntry(const QString &relativePath);
 
+    QVariantList linkGraph() const { return m_linkIndex.graphModel(); }
+
     // Exposed (non-invokable) for direct unit testing of vault boundary
     // semantics; not meant for QML consumption.
     QString relativeVaultPath(const QString &absolutePath) const;
     QString resolveWikiLinkTarget(const QString &target) const;
+    QStringList linkIndexForwardTargets(const QString &relativePath) const;
+    QStringList linkIndexBacklinks(const QString &relativePath) const;
+    void rescanVaultForTest() { rescanVault(); }
 
 signals:
     void fileUrlChanged();
@@ -131,6 +139,7 @@ signals:
     void vaultDialogRequested();
     void wikiLinkResolved(const QString &relativePath);
     void wikiLinkMissing(const QString &target);
+    void linkGraphChanged();
 
 private:
     void loadDocumentText(const QString &text);
@@ -157,6 +166,7 @@ private:
     void watchVaultDirectories();
     void rescanVault();
     void rebuildVaultEntries();
+    void rebuildLinkIndex();
     void syncVaultDirectory(const QString &absoluteDirPath);
     void scanNewVaultDirectory(const QString &relativePath);
     void removeVaultSubtree(const QString &relativePath);
@@ -200,4 +210,5 @@ private:
     // relative path (posix separators) -> is directory
     QMap<QString, bool> m_vaultPaths;
     QVariantList m_vaultEntries;
+    LinkIndex m_linkIndex;
 };
