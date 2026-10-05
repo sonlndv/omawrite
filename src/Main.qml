@@ -260,6 +260,39 @@ ApplicationWindow {
         onActivated: win.graphVisible = !win.graphVisible
     }
 
+    Shortcut {
+        sequences: ["Ctrl+Shift+O", "Ctrl+Space"]
+        context: Qt.ApplicationShortcut
+        onActivated: {
+            if (quickSwitcher.opened)
+                quickSwitcher.toggleMode();
+            else
+                quickSwitcher.open();
+        }
+    }
+
+    QuickSwitcher {
+        id: quickSwitcher
+        objectName: "quickSwitcher"
+        darkMode: win.darkMode
+        textScale: win.textScale
+        backgroundColor: win.darkMode ? "#141414" : "#f3f3f3"
+        textColor: win.textColor
+        mutedColor: win.mutedColor
+        accentColor: backend.themeAccent
+        parent: win.contentItem
+
+        onTitleQueryChanged: function(query) {
+            results = backend.searchVaultTitles(query);
+        }
+        onContentQueryChanged: function(query) {
+            results = backend.searchVaultContent(query);
+        }
+        onOpenRequested: function(relativePath) {
+            win.requestOpenVaultPath(relativePath);
+        }
+    }
+
     Connections {
         target: backend
 
@@ -454,7 +487,7 @@ ApplicationWindow {
         standardButtons: Dialog.Close
         anchors.centerIn: parent
         contentItem: Label {
-            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+K  Link\nCtrl+P  Print\nF11 / Super+F  Fullscreen\nCtrl+?  Shortcuts"
+            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+K  Link\nCtrl+P  Print\nCtrl+Shift+O / Ctrl+Space  Quick Switcher\nF11 / Super+F  Fullscreen\nCtrl+?  Shortcuts"
             lineHeight: 1.5
         }
     }

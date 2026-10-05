@@ -5,6 +5,7 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickStyle>
+#include <QQuickWindow>
 
 #include "backend.h"
 #include "markdownhighlighter.h"
@@ -137,6 +138,113 @@ private slots:
         QVERIFY(backend.createVaultNote(QString(), QStringLiteral("Ambiguous")));
         QCOMPARE(backend.resolveWikiLinkTarget(QStringLiteral("Ambiguous")),
                  QStringLiteral("Ambiguous.md"));
+    }
+
+    void fuzzyMatchesTitlesRankingContiguousRunsFirst() {
+        QTemporaryDir vaultParent;
+        QVERIFY(vaultParent.isValid());
+        const QString vaultPath = vaultParent.filePath(QStringLiteral("vault"));
+
+        Backend backend;
+        backend.setVaultRoot(QUrl::fromLocalFile(vaultPath));
+
+        QVERIFY(backend.createVaultNote(QString(), QStringLiteral("Project Plan")));
+        QVERIFY(backend.createVaultNote(QString(), QStringLiteral("Pending Rejection")));
+        QVERIFY(backend.createVaultFolder(QString(), QStringLiteral("Sub")));
+        QVERIFY(backend.createVaultNote(QStringLiteral("Sub"), QStringLiteral("Project Notes")));
+
+        const QVariantList results = backend.searchVaultTitles(QStringLiteral("proj"));
+        QVERIFY(results.size() >= 2);
+        const QString firstName = results.at(0).toMap().value(QStringLiteral("name")).toString();
+        QVERIFY(firstName == QStringLiteral("Project Plan.md")
+                 || firstName == QStringLiteral("Project Notes.md"));
+
+        // No "Pending Rejection" result should outrank either "Project" note --
+        // it only matches as a loose subsequence, never contiguously.
+        bool sawProjectBeforeRejection = false;
+        for (int i = 0; i < results.size(); ++i) {
+            const QString name = results.at(i).toMap().value(QStringLiteral("name")).toString();
+            if (name.startsWith(QStringLiteral("Project")))
+                sawProjectBeforeRejection = true;
+            if (name == QStringLiteral("Pending Rejection.md")) {
+                QVERIFY(sawProjectBeforeRejection);
+                break;
+            }
+        }
+
+        QVERIFY(backend.searchVaultTitles(QStringLiteral("zzz")).isEmpty());
+        QCOMPARE(backend.searchVaultTitles(QString()).size(), 3);
+    }
+
+    void searchesVaultContentWithSnippetsAndMatchCountRanking() {
+        QTemporaryDir vaultParent;
+        QVERIFY(vaultParent.isValid());
+        const QString vaultPath = vaultParent.filePath(QStringLiteral("vault"));
+
+        Backend backend;
+        backend.setVaultRoot(QUrl::fromLocalFile(vaultPath));
+
+        QVERIFY(backend.createVaultNote(QString(), QStringLiteral("Alpha")));
+        QVERIFY(backend.createVaultNote(QString(), QStringLiteral("Beta")));
+
+        QFile alphaFile(QDir(vaultPath).filePath(QStringLiteral("Alpha.md")));
+        QVERIFY(alphaFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        alphaFile.write("the quick brown fox jumps, the quick fox runs");
+        alphaFile.close();
+
+        QFile betaFile(QDir(vaultPath).filePath(QStringLiteral("Beta.md")));
+        QVERIFY(betaFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        betaFile.write("a single quick mention");
+        betaFile.close();
+
+        backend.rescanVaultForTest();
+
+        const QVariantList results = backend.searchVaultContent(QStringLiteral("quick"));
+        QCOMPARE(results.size(), 2);
+        QCOMPARE(results.at(0).toMap().value(QStringLiteral("name")).toString(),
+                 QStringLiteral("Alpha.md"));
+        QVERIFY(results.at(0).toMap().value(QStringLiteral("snippet")).toString()
+                    .contains(QStringLiteral("quick")));
+
+        QVERIFY(backend.searchVaultContent(QStringLiteral("nonexistent")).isEmpty());
+        QVERIFY(backend.searchVaultContent(QString()).isEmpty());
+    }
+
+    void quickSwitcherOpensWithShortcutAndSwitchesModes() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        QTemporaryDir vaultParent;
+        QVERIFY(vaultParent.isValid());
+        const QString vaultPath = vaultParent.filePath(QStringLiteral("vault"));
+
+        Backend backend;
+        backend.setVaultRoot(QUrl::fromLocalFile(vaultPath));
+        QVERIFY(backend.createVaultNote(QString(), QStringLiteral("Findable Note")));
+
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+        QMetaObject::invokeMethod(window.data(), "showNormal");
+        QQuickWindow *quickWindow = qobject_cast<QQuickWindow *>(window.data());
+        QVERIFY(quickWindow);
+        QTest::qWaitForWindowExposed(quickWindow);
+
+        QObject *quickSwitcher = window->findChild<QObject *>(QStringLiteral("quickSwitcher"));
+        QVERIFY(quickSwitcher);
+        QCOMPARE(quickSwitcher->property("opened").toBool(), false);
+
+        QVERIFY(QMetaObject::invokeMethod(quickSwitcher, "open"));
+        for (int i = 0; i < 20 && !quickSwitcher->property("opened").toBool(); ++i)
+            QTest::qWait(25);
+        QCOMPARE(quickSwitcher->property("opened").toBool(), true);
+        QCOMPARE(quickSwitcher->property("mode").toString(), QStringLiteral("titles"));
+
+        QVERIFY(QMetaObject::invokeMethod(quickSwitcher, "toggleMode"));
+        QCOMPARE(quickSwitcher->property("mode").toString(), QStringLiteral("content"));
     }
 
     void loadsCurrentOmarchyTheme() {

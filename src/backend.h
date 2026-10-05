@@ -111,6 +111,13 @@ public:
 
     QVariantList linkGraph() const { return m_linkIndex.graphModel(); }
 
+    // Quick switcher / vault search. Both return QML-facing lists capped to
+    // a sane size; neither persists anything -- they re-derive from
+    // m_vaultPaths (titles) or re-read note content from disk (content),
+    // same tradeoff LinkIndex::rebuild makes.
+    Q_INVOKABLE QVariantList searchVaultTitles(const QString &query) const;
+    Q_INVOKABLE QVariantList searchVaultContent(const QString &query) const;
+
     // Exposed (non-invokable) for direct unit testing of vault boundary
     // semantics; not meant for QML consumption.
     QString relativeVaultPath(const QString &absolutePath) const;

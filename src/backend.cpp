@@ -935,6 +935,143 @@ QStringList Backend::linkIndexBacklinks(const QString &relativePath) const {
     return m_linkIndex.backlinks(relativePath);
 }
 
+namespace {
+// Simple subsequence fuzzy match: every character of `query` (lowercased)
+// must appear in `text` in order, gaps allowed. Score rewards contiguous
+// runs and early matches so "proj" ranks "Project Plan.md" above
+// "Pending Rejection.md". Returns -1 for no match.
+int fuzzyScore(const QString &text, const QString &query) {
+    if (query.isEmpty())
+        return 0;
+
+    int score = 0;
+    int ti = 0;
+    int runLength = 0;
+    for (int qi = 0; qi < query.size(); ++qi) {
+        const QChar qc = query.at(qi);
+        bool found = false;
+        for (; ti < text.size(); ++ti) {
+            if (text.at(ti) == qc) {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            return -1;
+
+        runLength++;
+        score += 10 + runLength * 2 - ti; // contiguous runs and early hits score higher
+        ++ti;
+    }
+    return score;
+}
+}
+
+QVariantList Backend::searchVaultTitles(const QString &query) const {
+    QVariantList results;
+    const QString needle = query.toLower();
+
+    struct Candidate {
+        QString relativePath;
+        QString name;
+        int score;
+    };
+    QVector<Candidate> candidates;
+
+    for (auto it = m_vaultPaths.constBegin(); it != m_vaultPaths.constEnd(); ++it) {
+        if (it.value()) // skip directories
+            continue;
+        const QString &relative = it.key();
+        const QString name = QFileInfo(relative).fileName();
+        const int score = fuzzyScore(name.toLower(), needle);
+        if (score >= 0)
+            candidates.append({relative, name, score});
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate &a, const Candidate &b) {
+        if (a.score != b.score)
+            return a.score > b.score;
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
+
+    constexpr int maxResults = 50;
+    for (int i = 0; i < candidates.size() && i < maxResults; ++i) {
+        results.append(QVariantMap{
+            {QStringLiteral("path"), candidates.at(i).relativePath},
+            {QStringLiteral("name"), candidates.at(i).name},
+        });
+    }
+    return results;
+}
+
+QVariantList Backend::searchVaultContent(const QString &query) const {
+    QVariantList results;
+    if (query.trimmed().isEmpty() || m_vaultRoot.isEmpty())
+        return results;
+
+    const QString needle = query.toLower();
+    const QDir vaultDir(m_vaultRoot);
+
+    struct Hit {
+        QString relativePath;
+        QString name;
+        QString snippet;
+        int matchCount;
+    };
+    QVector<Hit> hits;
+
+    for (auto it = m_vaultPaths.constBegin(); it != m_vaultPaths.constEnd(); ++it) {
+        if (it.value()) // skip directories
+            continue;
+        const QString &relative = it.key();
+        if (!relative.endsWith(QStringLiteral(".md"), Qt::CaseInsensitive))
+            continue;
+
+        QFile file(vaultDir.filePath(relative));
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+            continue;
+        const QString text = QString::fromUtf8(file.readAll());
+        const QString haystack = text.toLower();
+
+        int matchCount = 0;
+        int firstMatch = -1;
+        int pos = 0;
+        while ((pos = haystack.indexOf(needle, pos)) != -1) {
+            if (firstMatch < 0)
+                firstMatch = pos;
+            matchCount++;
+            pos += needle.length();
+        }
+        if (matchCount == 0)
+            continue;
+
+        const int contextStart = std::max(0, firstMatch - 40);
+        QString snippet = text.mid(contextStart, 120).replace(QLatin1Char('\n'), QLatin1Char(' '));
+        if (contextStart > 0)
+            snippet.prepend(QStringLiteral("\u2026"));
+        if (contextStart + 120 < text.size())
+            snippet.append(QStringLiteral("\u2026"));
+
+        hits.append({relative, QFileInfo(relative).fileName(), snippet, matchCount});
+    }
+
+    std::sort(hits.begin(), hits.end(), [](const Hit &a, const Hit &b) {
+        if (a.matchCount != b.matchCount)
+            return a.matchCount > b.matchCount;
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
+
+    constexpr int maxResults = 50;
+    for (int i = 0; i < hits.size() && i < maxResults; ++i) {
+        results.append(QVariantMap{
+            {QStringLiteral("path"), hits.at(i).relativePath},
+            {QStringLiteral("name"), hits.at(i).name},
+            {QStringLiteral("snippet"), hits.at(i).snippet},
+        });
+    }
+    return results;
+}
+
 // Re-reads one watched directory and folds in what changed: new files/folders
 // are added (and new folders get their own watch + are scanned for existing
 // children), removed entries are dropped along with any subtree beneath them.
