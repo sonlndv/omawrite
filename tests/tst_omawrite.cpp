@@ -579,8 +579,9 @@ private slots:
 
         const double elapsedSeconds = timer.elapsed() / 1000.0;
         const double fps = (paintsAtEnd - paintsAtStart) / elapsedSeconds;
-        qInfo("Graph view 500-note/%d-edge render: %d paints in %.2fs = %.1f fps",
-              backend.linkGraph().size(), paintsAtEnd - paintsAtStart, elapsedSeconds, fps);
+        qInfo("Graph view 500-note/%lld-edge render: %d paints in %.2fs = %.1f fps",
+              static_cast<long long>(backend.linkGraph().size()),
+              paintsAtEnd - paintsAtStart, elapsedSeconds, fps);
 
         QVERIFY2(fps >= 30.0, qPrintable(QStringLiteral(
             "Graph view dropped below interactive fps: %1").arg(fps)));
