@@ -104,6 +104,10 @@ public:
     Q_INVOKABLE bool renameVaultEntry(const QString &relativePath, const QString &newName);
     Q_INVOKABLE bool deleteVaultEntry(const QString &relativePath);
 
+    // Exposed (non-invokable) for direct unit testing of vault boundary
+    // semantics; not meant for QML consumption.
+    QString relativeVaultPath(const QString &absolutePath) const;
+
 signals:
     void fileUrlChanged();
     void modifiedChanged();
@@ -152,7 +156,6 @@ private:
     void scanNewVaultDirectory(const QString &relativePath);
     void removeVaultSubtree(const QString &relativePath);
     QString absoluteVaultPath(const QString &relativePath) const;
-    QString relativeVaultPath(const QString &absolutePath) const;
     bool isInsideVault(const QString &absolutePath) const;
 
     QUrl m_fileUrl;

@@ -257,6 +257,106 @@ private slots:
         QCOMPARE(editor->property("font").value<QFont>().pixelSize(), 15);
     }
 
+    void persistsVaultRootAcrossRestart() {
+        QTemporaryDir vaultParent;
+        QVERIFY(vaultParent.isValid());
+        const QString vaultPath = vaultParent.filePath(QStringLiteral("myvault"));
+
+        {
+            Backend backend;
+            backend.setVaultRoot(QUrl::fromLocalFile(vaultPath));
+            QCOMPARE(backend.vaultRoot(), QDir(vaultPath).absolutePath());
+        }
+
+        // Fresh instance (simulated restart) must read the same vault root
+        // back out of QSettings rather than falling back to ~/notes.
+        Backend restarted;
+        QCOMPARE(restarted.vaultRoot(), QDir(vaultPath).absolutePath());
+    }
+
+    void syncsExternalCreateAndDeleteWithoutRestart() {
+        QTemporaryDir vaultParent;
+        QVERIFY(vaultParent.isValid());
+        const QString vaultPath = vaultParent.filePath(QStringLiteral("vault"));
+
+        Backend backend;
+        backend.setVaultRoot(QUrl::fromLocalFile(vaultPath));
+
+        auto pathsInEntries = [&backend]() {
+            QSet<QString> paths;
+            for (const QVariant &entry : backend.vaultEntries())
+                paths.insert(entry.toMap().value(QStringLiteral("path")).toString());
+            return paths;
+        };
+
+        QVERIFY(!pathsInEntries().contains(QStringLiteral("external.md")));
+
+        QFile externalFile(QDir(vaultPath).filePath(QStringLiteral("external.md")));
+        QVERIFY(externalFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        externalFile.write("created outside the app");
+        externalFile.close();
+
+        QTRY_VERIFY(pathsInEntries().contains(QStringLiteral("external.md")));
+
+        QVERIFY(QFile::remove(externalFile.fileName()));
+        QTRY_VERIFY(!pathsInEntries().contains(QStringLiteral("external.md")));
+    }
+
+    void roundTripsNoteAndFolderCrudOnDisk() {
+        QTemporaryDir vaultParent;
+        QVERIFY(vaultParent.isValid());
+        const QString vaultPath = vaultParent.filePath(QStringLiteral("vault"));
+
+        Backend backend;
+        backend.setVaultRoot(QUrl::fromLocalFile(vaultPath));
+
+        QVERIFY(backend.createVaultFolder(QString(), QStringLiteral("Folder A")));
+        QVERIFY(QDir(vaultPath).exists(QStringLiteral("Folder A")));
+
+        QVERIFY(backend.createVaultNote(QStringLiteral("Folder A"), QStringLiteral("Note One")));
+        const QString originalPath = QDir(vaultPath).filePath(QStringLiteral("Folder A/Note One.md"));
+        QVERIFY(QFileInfo::exists(originalPath));
+
+        QVERIFY(backend.renameVaultEntry(QStringLiteral("Folder A/Note One.md"),
+                                         QStringLiteral("Note Renamed")));
+        QVERIFY(!QFileInfo::exists(originalPath));
+        const QString renamedPath = QDir(vaultPath).filePath(QStringLiteral("Folder A/Note Renamed.md"));
+        QVERIFY(QFileInfo::exists(renamedPath));
+
+        QVERIFY(backend.deleteVaultEntry(QStringLiteral("Folder A/Note Renamed.md")));
+        QVERIFY(!QFileInfo::exists(renamedPath));
+
+        QVERIFY(backend.deleteVaultEntry(QStringLiteral("Folder A")));
+        QVERIFY(!QDir(vaultPath).exists(QStringLiteral("Folder A")));
+    }
+
+    void treatsVaultRootItselfAsOutsideForRelativePathPurposes() {
+        // Pinning the bug found and fixed during Phase 1: relativeVaultPath()
+        // must report "" (not ".") for the vault root itself, and must report
+        // "" for any path outside the vault, so currentVaultRelativePath()
+        // correctly treats both cases as "not a vault note".
+        QTemporaryDir vaultParent;
+        QVERIFY(vaultParent.isValid());
+        const QString vaultPath = vaultParent.filePath(QStringLiteral("vault"));
+
+        Backend backend;
+        backend.setVaultRoot(QUrl::fromLocalFile(vaultPath));
+
+        QCOMPARE(backend.relativeVaultPath(QDir(vaultPath).absolutePath()), QString());
+
+        QTemporaryDir outside;
+        QVERIFY(outside.isValid());
+        const QString outsideFile = outside.filePath(QStringLiteral("elsewhere.md"));
+        QFile file(outsideFile);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        file.close();
+
+        QCOMPARE(backend.relativeVaultPath(outsideFile), QString());
+
+        backend.open(QUrl::fromLocalFile(outsideFile));
+        QVERIFY(backend.currentVaultRelativePath().isEmpty());
+    }
+
     void remembersLastSaveDirectory() {
         QTemporaryDir saveDirectory;
         QVERIFY(saveDirectory.isValid());
