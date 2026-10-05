@@ -436,6 +436,63 @@ void Backend::setSearchHighlight(const QString &query, int currentMatchStart) {
         m_highlighter->setSearch(query, currentMatchStart);
 }
 
+QString Backend::wikiLinkTargetAt(int position) const {
+    if (!m_document)
+        return {};
+
+    const QTextBlock block =
+        m_document->findBlock(qBound(0, position, m_document->characterCount() - 1));
+    if (!block.isValid())
+        return {};
+
+    const int blockPosition = position - block.position();
+    const QList<MarkdownHighlighter::WikiLink> links =
+        MarkdownHighlighter::wikiLinks(block.text());
+    for (const MarkdownHighlighter::WikiLink &link : links) {
+        if (blockPosition >= link.whole.start
+                && blockPosition < link.whole.start + link.whole.length)
+            return link.target;
+    }
+    return {};
+}
+
+void Backend::openWikiLink(const QString &target) {
+    if (target.isEmpty())
+        return;
+
+    const QString relative = resolveWikiLinkTarget(target);
+    if (!relative.isEmpty())
+        emit wikiLinkResolved(relative);
+    else
+        emit wikiLinkMissing(target);
+}
+
+// Resolution rule: match by filename stem (name without extension),
+// case-insensitive, vault-wide. Ambiguity (more than one note with the same
+// stem in different folders) picks the shallowest path -- fewest path
+// separators -- and breaks remaining ties alphabetically for determinism.
+QString Backend::resolveWikiLinkTarget(const QString &target) const {
+    QString bestPath;
+    int bestDepth = -1;
+    for (auto it = m_vaultPaths.constBegin(); it != m_vaultPaths.constEnd(); ++it) {
+        const QString &relative = it.key();
+        if (it.value()) // directories are not link targets
+            continue;
+
+        const QString stem = QFileInfo(relative).completeBaseName();
+        if (stem.compare(target, Qt::CaseInsensitive) != 0)
+            continue;
+
+        const int depth = relative.count(QLatin1Char('/'));
+        if (bestDepth < 0 || depth < bestDepth
+                || (depth == bestDepth && relative.compare(bestPath, Qt::CaseInsensitive) < 0)) {
+            bestPath = relative;
+            bestDepth = depth;
+        }
+    }
+    return bestPath;
+}
+
 void Backend::openExternalUrl(const QUrl &url) {
     const QString scheme = url.scheme().toLower();
     if (scheme == QStringLiteral("http") || scheme == QStringLiteral("https")

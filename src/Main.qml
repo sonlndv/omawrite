@@ -43,6 +43,7 @@ ApplicationWindow {
     property string vaultActionTargetPath: ""
     property string vaultActionTargetParent: ""
     property bool vaultActionIsFolder: false
+    property string pendingWikiLinkTarget: ""
 
     Material.theme: darkMode ? Material.Dark : Material.Light
     Material.accent: backend.themeAccent
@@ -283,6 +284,31 @@ ApplicationWindow {
 
         function onVaultDialogRequested() {
             vaultFolderDialog.open();
+        }
+
+        function onWikiLinkResolved(relativePath) {
+            win.requestOpenVaultPath(relativePath);
+        }
+
+        function onWikiLinkMissing(target) {
+            win.pendingWikiLinkTarget = target;
+            createWikiLinkDialog.open();
+        }
+    }
+
+    Dialog {
+        id: createWikiLinkDialog
+        modal: true
+        title: "Note not found"
+        standardButtons: Dialog.Yes | Dialog.No
+        anchors.centerIn: parent
+        contentItem: Label {
+            text: "\"" + win.pendingWikiLinkTarget + "\" doesn't exist yet. Create it?"
+            wrapMode: Text.Wrap
+        }
+        onAccepted: {
+            if (backend.createVaultNote("", win.pendingWikiLinkTarget))
+                win.requestOpenVaultPath(win.pendingWikiLinkTarget + ".md");
         }
     }
 
@@ -885,6 +911,14 @@ ApplicationWindow {
 
                     var returnKey = event.key === Qt.Key_Return || event.key === Qt.Key_Enter;
                     var commandModifier = event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier);
+                    if (returnKey && !commandModifier && selectionStart === selectionEnd) {
+                        var linkTarget = backend.wikiLinkTargetAt(cursorPosition);
+                        if (linkTarget.length > 0) {
+                            backend.openWikiLink(linkTarget);
+                            event.accepted = true;
+                            return;
+                        }
+                    }
                     if (returnKey && !commandModifier) {
                         smartReturn(event.modifiers & Qt.ShiftModifier);
                         event.accepted = true;
@@ -929,6 +963,27 @@ ApplicationWindow {
                 Component.onCompleted: {
                     backend.attachDocument(textDocument);
                     forceActiveFocus();
+                }
+            }
+
+            // Overlay for Ctrl+click on a [[wikilink]]. Click-through to the
+            // TextEdit beneath (for normal selection/caret placement) unless
+            // Ctrl is held and the position lands inside a link.
+            MouseArea {
+                anchors.fill: editor
+                acceptedButtons: Qt.LeftButton
+                cursorShape: Qt.IBeamCursor
+                onPressed: function(mouse) {
+                    if (mouse.modifiers & Qt.ControlModifier) {
+                        var pos = editor.positionAt(mouse.x, mouse.y);
+                        var target = backend.wikiLinkTargetAt(pos);
+                        if (target.length > 0) {
+                            backend.openWikiLink(target);
+                            mouse.accepted = true;
+                            return;
+                        }
+                    }
+                    mouse.accepted = false;
                 }
             }
         }

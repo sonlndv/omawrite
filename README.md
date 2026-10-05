@@ -24,6 +24,18 @@ Install via the Omarchy Package Repository via the `omawrite` package. It's inst
 - `Ctrl+B`, `Ctrl+I`, and `Ctrl+K` insert bold, italic, and link Markdown.
 - `Ctrl+?` shows the keyboard shortcut reference.
 
+## Wikilinks
+
+Typing `[[Note Name]]` or `[[Note Name|alias]]` creates a link to another note
+in the vault, styled with the theme's accent color. Ctrl+click a link, or
+place the cursor inside one and press Enter, to open it; if no matching note
+exists you're offered to create it, Obsidian-style.
+
+A link resolves by matching the vault-wide filename stem (name without
+`.md`), case-insensitive. If more than one note shares that stem, the
+shallowest path (fewest folders deep) wins; remaining ties break
+alphabetically by path for a deterministic result.
+
 Unsaved drafts are recovered after an abnormal exit. Omawrite also watches open files
 and warns before an external change can replace local work.
 

@@ -93,6 +93,51 @@ private slots:
         QCOMPARE(markup.at(2).markers[0].length, 1);
     }
 
+    void findsWikiLinkRanges() {
+        const auto links = MarkdownHighlighter::wikiLinks(
+            QStringLiteral("See [[Project Plan]] and [[Other Note|the other one]] today."));
+        QCOMPARE(links.size(), 2);
+        QCOMPARE(links.at(0).target, QStringLiteral("Project Plan"));
+        QCOMPARE(links.at(0).whole.start, 4);
+        QCOMPARE(links.at(0).whole.length, 16);
+        QCOMPARE(links.at(1).target, QStringLiteral("Other Note"));
+        QCOMPARE(links.at(1).whole.length, 28);
+    }
+
+    void ignoresMalformedWikiLinks() {
+        QVERIFY(MarkdownHighlighter::wikiLinks(QStringLiteral("[[]]")).isEmpty());
+        QVERIFY(MarkdownHighlighter::wikiLinks(QStringLiteral("[[ ]]")).isEmpty());
+        QVERIFY(MarkdownHighlighter::wikiLinks(QStringLiteral("[not a link]")).isEmpty());
+        const auto unterminated = MarkdownHighlighter::wikiLinks(QStringLiteral("[[Dangling"));
+        QVERIFY(unterminated.isEmpty());
+    }
+
+    void resolvesWikiLinksByStemCaseInsensitiveShallowestWins() {
+        QTemporaryDir vaultParent;
+        QVERIFY(vaultParent.isValid());
+        const QString vaultPath = vaultParent.filePath(QStringLiteral("vault"));
+
+        Backend backend;
+        backend.setVaultRoot(QUrl::fromLocalFile(vaultPath));
+
+        QVERIFY(backend.createVaultNote(QString(), QStringLiteral("Root Note")));
+        QVERIFY(backend.createVaultFolder(QString(), QStringLiteral("Sub")));
+        QVERIFY(backend.createVaultNote(QStringLiteral("Sub"), QStringLiteral("Deep Note")));
+
+        QCOMPARE(backend.resolveWikiLinkTarget(QStringLiteral("root note")),
+                 QStringLiteral("Root Note.md"));
+        QCOMPARE(backend.resolveWikiLinkTarget(QStringLiteral("Deep Note")),
+                 QStringLiteral("Sub/Deep Note.md"));
+        QVERIFY(backend.resolveWikiLinkTarget(QStringLiteral("No Such Note")).isEmpty());
+
+        // Ambiguous stem at two depths: the shallower path wins.
+        QVERIFY(backend.createVaultFolder(QString(), QStringLiteral("Other")));
+        QVERIFY(backend.createVaultNote(QStringLiteral("Other"), QStringLiteral("Ambiguous")));
+        QVERIFY(backend.createVaultNote(QString(), QStringLiteral("Ambiguous")));
+        QCOMPARE(backend.resolveWikiLinkTarget(QStringLiteral("Ambiguous")),
+                 QStringLiteral("Ambiguous.md"));
+    }
+
     void loadsCurrentOmarchyTheme() {
         QTemporaryDir homeDirectory;
         QVERIFY(homeDirectory.isValid());

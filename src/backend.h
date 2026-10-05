@@ -84,6 +84,8 @@ public:
     Q_INVOKABLE QString clipboardText() const;
     Q_INVOKABLE bool editorTextChanged();
     Q_INVOKABLE QVariantList hiddenRangesAt(int position) const;
+    Q_INVOKABLE QString wikiLinkTargetAt(int position) const;
+    Q_INVOKABLE void openWikiLink(const QString &target);
     Q_INVOKABLE void setSearchHighlight(const QString &query, int currentMatchStart);
     Q_INVOKABLE void openExternalUrl(const QUrl &url);
     Q_INVOKABLE QVariantMap windowGeometry() const;
@@ -107,6 +109,7 @@ public:
     // Exposed (non-invokable) for direct unit testing of vault boundary
     // semantics; not meant for QML consumption.
     QString relativeVaultPath(const QString &absolutePath) const;
+    QString resolveWikiLinkTarget(const QString &target) const;
 
 signals:
     void fileUrlChanged();
@@ -126,6 +129,8 @@ signals:
     void vaultVisibleChanged();
     void vaultEntriesChanged();
     void vaultDialogRequested();
+    void wikiLinkResolved(const QString &relativePath);
+    void wikiLinkMissing(const QString &target);
 
 private:
     void loadDocumentText(const QString &text);

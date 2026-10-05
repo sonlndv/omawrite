@@ -102,6 +102,10 @@ void MarkdownHighlighter::rebuildFormats() {
     m_linkFormat.setForeground(link);
     m_linkFormat.setFontUnderline(true);
 
+    m_wikiLinkFormat = QTextCharFormat();
+    m_wikiLinkFormat.setForeground(link);
+    m_wikiLinkFormat.setFontUnderline(true);
+
     m_searchFormat = QTextCharFormat();
     m_searchFormat.setBackground(m_darkMode ? QColor(QStringLiteral("#725b18"))
                                             : QColor(QStringLiteral("#ffe58a")));
@@ -117,6 +121,8 @@ void MarkdownHighlighter::highlightBlock(const QString &text) {
             || text.contains(QLatin1Char('_')) || text.contains(QLatin1Char('['))) {
             highlightInline(text);
         }
+        if (text.contains(QStringLiteral("[[")))
+            highlightWikiLinks(text);
     }
     highlightSearch(text);
 }
@@ -250,4 +256,30 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
     }
 
     return markup;
+}
+
+void MarkdownHighlighter::highlightWikiLinks(const QString &text) {
+    const QList<WikiLink> links = wikiLinks(text);
+    for (const WikiLink &link : links)
+        setFormat(link.whole.start, link.whole.length, m_wikiLinkFormat);
+}
+
+QList<MarkdownHighlighter::WikiLink> MarkdownHighlighter::wikiLinks(const QString &text) {
+    QList<WikiLink> links;
+    if (!text.contains(QStringLiteral("[[")))
+        return links;
+
+    // `[[Note Name]]` or `[[Note Name|alias]]`. The target excludes any alias
+    // and is trimmed, matching how a human would type the note's name.
+    static const QRegularExpression wikiLinkRe(
+        QStringLiteral("\\[\\[([^\\[\\]|]+)(?:\\|([^\\[\\]]*))?\\]\\]"));
+    QRegularExpressionMatchIterator matches = wikiLinkRe.globalMatch(text);
+    while (matches.hasNext()) {
+        const QRegularExpressionMatch match = matches.next();
+        const QString target = match.captured(1).trimmed();
+        if (target.isEmpty())
+            continue;
+        links.append({{int(match.capturedStart(0)), int(match.capturedLength(0))}, target});
+    }
+    return links;
 }
