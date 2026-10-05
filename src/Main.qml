@@ -44,6 +44,7 @@ ApplicationWindow {
     property string vaultActionTargetParent: ""
     property bool vaultActionIsFolder: false
     property string pendingWikiLinkTarget: ""
+    property bool graphVisible: false
 
     Material.theme: darkMode ? Material.Dark : Material.Light
     Material.accent: backend.themeAccent
@@ -251,6 +252,12 @@ ApplicationWindow {
         sequence: "Ctrl+Shift+E"
         context: Qt.ApplicationShortcut
         onActivated: backend.vaultVisible = !backend.vaultVisible
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+G"
+        context: Qt.ApplicationShortcut
+        onActivated: win.graphVisible = !win.graphVisible
     }
 
     Connections {
@@ -988,6 +995,27 @@ ApplicationWindow {
             }
         }
 
+        GraphView {
+            id: graphView
+            objectName: "graphView"
+            visible: win.graphVisible
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.right: parent.right
+            anchors.left: vaultSidebar.right
+            backgroundColor: win.pageColor
+            nodeColor: backend.themeAccent
+            brokenColor: win.darkMode ? "#9a5a5a" : "#b23b3b"
+            edgeColor: win.darkMode ? "#4a4a4a" : "#cfcfcf"
+            textColor: win.mutedColor
+            textScale: win.textScale
+            linkGraph: backend.linkGraph
+
+            onNodeOpenRequested: function(relativePath) {
+                win.requestOpenVaultPath(relativePath);
+            }
+        }
+
         Row {
             id: footerStatus
             anchors.left: parent.left
@@ -1011,6 +1039,14 @@ ApplicationWindow {
                 iconColor: backend.vaultVisible ? backend.themeAccent : win.mutedColor
                 tooltip: "Notes"
                 onClicked: backend.vaultVisible = !backend.vaultVisible
+            }
+
+            FooterIconButton {
+                objectName: "graphToggleButton"
+                iconName: "graph"
+                iconColor: win.graphVisible ? backend.themeAccent : win.mutedColor
+                tooltip: "Graph"
+                onClicked: win.graphVisible = !win.graphVisible
             }
 
             FooterIconButton {

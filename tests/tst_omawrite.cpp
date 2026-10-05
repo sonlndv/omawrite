@@ -528,6 +528,64 @@ private slots:
                  QStringList{QStringLiteral("A.md")});
     }
 
+    void rendersFiveHundredNoteGraphAtInteractiveFps() {
+        QTemporaryDir vaultParent;
+        QVERIFY(vaultParent.isValid());
+        const QString vaultPath = vaultParent.filePath(QStringLiteral("vault"));
+        QDir().mkpath(vaultPath);
+
+        const int noteCount = 500;
+        for (int i = 0; i < noteCount; ++i) {
+            QFile note(QDir(vaultPath).filePath(QStringLiteral("Note %1.md").arg(i)));
+            QVERIFY(note.open(QIODevice::WriteOnly | QIODevice::Text));
+            note.write(QStringLiteral("Links to [[Note %1]] and [[Note %2]].")
+                           .arg((i + 1) % noteCount)
+                           .arg((i + 250) % noteCount)
+                           .toUtf8());
+            note.close();
+        }
+
+        Backend backend;
+        backend.setVaultRoot(QUrl::fromLocalFile(vaultPath));
+        QCOMPARE(backend.linkGraph().size(), noteCount * 2);
+
+        const QString mainQmlPath = QFINDTESTDATA(QStringLiteral("../src/Main.qml"));
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        window->setProperty("graphVisible", true);
+        QObject *graphView = window->findChild<QObject *>(QStringLiteral("graphView"));
+        QVERIFY(graphView);
+        QCOMPARE(graphView->property("visible").toBool(), true);
+
+        // Drain the Qt event loop for a fixed wall-clock window so the
+        // GraphView's own 16ms Timer drives real simulation + Canvas
+        // repaint cycles, then measure actual frames-per-second from the
+        // paint counter -- not from the cheap per-step JS cost, which says
+        // nothing about paint cost.
+        const int measureMs = 2000;
+        QElapsedTimer timer;
+        timer.start();
+        int paintsAtStart = graphView->property("paintCount").toInt();
+        while (timer.elapsed() < measureMs)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        int paintsAtEnd = graphView->property("paintCount").toInt();
+
+        const double elapsedSeconds = timer.elapsed() / 1000.0;
+        const double fps = (paintsAtEnd - paintsAtStart) / elapsedSeconds;
+        qInfo("Graph view 500-note/%d-edge render: %d paints in %.2fs = %.1f fps",
+              backend.linkGraph().size(), paintsAtEnd - paintsAtStart, elapsedSeconds, fps);
+
+        QVERIFY2(fps >= 30.0, qPrintable(QStringLiteral(
+            "Graph view dropped below interactive fps: %1").arg(fps)));
+    }
+
     void reportsColdScanTimeForOneThousandNotes() {
         QTemporaryDir vaultParent;
         QVERIFY(vaultParent.isValid());

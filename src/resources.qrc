@@ -9,6 +9,8 @@
         <file alias="FontPicker.qml">FontPicker.qml</file>
         <file alias="VaultSidebar.qml">VaultSidebar.qml</file>
         <file alias="VaultNamePromptDialog.qml">VaultNamePromptDialog.qml</file>
+        <file alias="GraphView.qml">GraphView.qml</file>
+        <file alias="GraphLayout.js">GraphLayout.js</file>
         <file alias="EditorMutations.js">EditorMutations.js</file>
         <file alias="fonts/IBMPlexMono-Regular.ttf">../fonts/IBMPlexMono-Regular.ttf</file>
         <file alias="fonts/IBMPlexMono-Italic.ttf">../fonts/IBMPlexMono-Italic.ttf</file>

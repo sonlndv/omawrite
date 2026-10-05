@@ -72,6 +72,26 @@ Item {
                 context.lineTo(13.5, 5.5);
                 context.moveTo(2.5, 6.5);
                 context.lineTo(13.5, 6.5);
+            } else if (control.iconName === "graph") {
+                context.moveTo(4, 11);
+                context.lineTo(8, 4.5);
+                context.moveTo(8, 4.5);
+                context.lineTo(12, 9);
+                context.moveTo(4, 11);
+                context.lineTo(12, 9);
+                context.moveTo(4, 11);
+                context.lineTo(7, 13.5);
+                context.moveTo(12, 9);
+                context.lineTo(7, 13.5);
+                context.closePath();
+                context.moveTo(5.4, 11);
+                context.arc(4, 11, 1.4, 0, Math.PI * 2);
+                context.moveTo(9.4, 4.5);
+                context.arc(8, 4.5, 1.4, 0, Math.PI * 2);
+                context.moveTo(13.4, 9);
+                context.arc(12, 9, 1.4, 0, Math.PI * 2);
+                context.moveTo(8.4, 13.5);
+                context.arc(7, 13.5, 1.4, 0, Math.PI * 2);
             } else {
                 context.moveTo(2.5, 13);
                 context.lineTo(2.5, 3.5);
