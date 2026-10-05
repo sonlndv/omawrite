@@ -60,6 +60,18 @@ Item {
                 context.lineTo(13, 13.5);
                 context.moveTo(5, 9.5);
                 context.lineTo(11, 9.5);
+            } else if (control.iconName === "vault") {
+                context.moveTo(2.5, 4);
+                context.lineTo(2.5, 12.5);
+                context.lineTo(13.5, 12.5);
+                context.lineTo(13.5, 4);
+                context.closePath();
+                context.moveTo(2.5, 4);
+                context.lineTo(6, 4);
+                context.lineTo(7, 5.5);
+                context.lineTo(13.5, 5.5);
+                context.moveTo(2.5, 6.5);
+                context.lineTo(13.5, 6.5);
             } else {
                 context.moveTo(2.5, 13);
                 context.lineTo(2.5, 3.5);

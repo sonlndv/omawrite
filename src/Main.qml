@@ -39,6 +39,10 @@ ApplicationWindow {
     property string pendingAction: ""
     property bool replaceOpen: false
     property bool awaitingPendingSave: false
+    readonly property int vaultSidebarWidth: scaledSize(220)
+    property string vaultActionTargetPath: ""
+    property string vaultActionTargetParent: ""
+    property bool vaultActionIsFolder: false
 
     Material.theme: darkMode ? Material.Dark : Material.Light
     Material.accent: backend.themeAccent
@@ -62,6 +66,10 @@ ApplicationWindow {
         pendingOpenUrl = url;
         pendingAction = "open";
         unsavedChangesDialog.open();
+    }
+
+    function requestOpenVaultPath(relativePath) {
+        requestOpen(backend.vaultFileUrl(relativePath));
     }
 
     function completePendingAction() {
@@ -238,6 +246,12 @@ ApplicationWindow {
         onActivated: win.moveSearch(1)
     }
 
+    Shortcut {
+        sequence: "Ctrl+Shift+E"
+        context: Qt.ApplicationShortcut
+        onActivated: backend.vaultVisible = !backend.vaultVisible
+    }
+
     Connections {
         target: backend
 
@@ -266,6 +280,19 @@ ApplicationWindow {
             externalChangeDialog.locallyModified = locallyModified;
             externalChangeDialog.open();
         }
+
+        function onVaultDialogRequested() {
+            vaultFolderDialog.open();
+        }
+    }
+
+    Dialogs.FolderDialog {
+        id: vaultFolderDialog
+        title: "Choose Notes Folder"
+        currentFolder: backend.vaultRoot.length > 0
+            ? "file://" + backend.vaultRoot
+            : ""
+        onAccepted: backend.setVaultRoot(selectedFolder)
     }
 
     Dialogs.FileDialog {
@@ -325,6 +352,68 @@ ApplicationWindow {
         onReloadRequested: backend.reloadFromDisk()
     }
 
+    VaultNamePromptDialog {
+        id: newNoteDialog
+        promptTitle: "New note"
+        darkMode: win.darkMode
+        textScale: win.textScale
+        textColor: win.textColor
+        strongTextColor: win.strongTextColor
+        activeButtonColor: backend.themeAccent
+        containerWidth: win.width
+        containerHeight: win.height
+        onNameAccepted: function(name) {
+            if (backend.createVaultNote(win.vaultActionTargetParent, name))
+                win.requestOpenVaultPath(win.vaultActionTargetParent.length > 0
+                    ? win.vaultActionTargetParent + "/" + name
+                    : name);
+        }
+    }
+
+    VaultNamePromptDialog {
+        id: newFolderDialog
+        promptTitle: "New folder"
+        darkMode: win.darkMode
+        textScale: win.textScale
+        textColor: win.textColor
+        strongTextColor: win.strongTextColor
+        activeButtonColor: backend.themeAccent
+        containerWidth: win.width
+        containerHeight: win.height
+        onNameAccepted: function(name) {
+            backend.createVaultFolder(win.vaultActionTargetParent, name);
+        }
+    }
+
+    VaultNamePromptDialog {
+        id: renameDialog
+        promptTitle: "Rename"
+        darkMode: win.darkMode
+        textScale: win.textScale
+        textColor: win.textColor
+        strongTextColor: win.strongTextColor
+        activeButtonColor: backend.themeAccent
+        containerWidth: win.width
+        containerHeight: win.height
+        onNameAccepted: function(name) {
+            backend.renameVaultEntry(win.vaultActionTargetPath, name);
+        }
+    }
+
+    Dialog {
+        id: deleteConfirmDialog
+        modal: true
+        title: "Delete"
+        standardButtons: Dialog.Yes | Dialog.No
+        anchors.centerIn: parent
+        contentItem: Label {
+            text: "Delete \"" + win.vaultActionTargetPath.split("/").pop()
+                + (win.vaultActionIsFolder ? "\" and everything in it?" : "\"?")
+            wrapMode: Text.Wrap
+        }
+        onAccepted: backend.deleteVaultEntry(win.vaultActionTargetPath)
+    }
+
     Dialog {
         id: shortcutsDialog
         modal: true
@@ -340,9 +429,54 @@ ApplicationWindow {
     Item {
         anchors.fill: parent
 
+        VaultSidebar {
+            id: vaultSidebar
+            objectName: "vaultSidebar"
+            visible: backend.vaultVisible
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left
+            width: visible ? win.vaultSidebarWidth : 0
+            vaultRoot: backend.vaultRoot
+            vaultEntries: backend.vaultEntries
+            currentRelativePath: backend.currentVaultRelativePath
+            darkMode: win.darkMode
+            textScale: win.textScale
+            backgroundColor: win.darkMode ? "#141414" : "#f3f3f3"
+            textColor: win.textColor
+            mutedColor: win.mutedColor
+            accentColor: backend.themeAccent
+
+            onOpenRequested: function(relativePath) { win.requestOpenVaultPath(relativePath); }
+            onChooseVaultRequested: backend.chooseVaultDialog()
+
+            onNewNoteRequested: function(parentRelativePath) {
+                win.vaultActionTargetParent = parentRelativePath;
+                newNoteDialog.open();
+            }
+            onNewFolderRequested: function(parentRelativePath) {
+                win.vaultActionTargetParent = parentRelativePath;
+                newFolderDialog.open();
+            }
+            onRenameRequested: function(relativePath, isFolder) {
+                win.vaultActionTargetPath = relativePath;
+                win.vaultActionIsFolder = isFolder;
+                renameDialog.initialText = relativePath.split("/").pop();
+                renameDialog.open();
+            }
+            onDeleteRequested: function(relativePath, isFolder) {
+                win.vaultActionTargetPath = relativePath;
+                win.vaultActionIsFolder = isFolder;
+                deleteConfirmDialog.open();
+            }
+        }
+
         Flickable {
             id: editorFlick
-            anchors.fill: parent
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.right: parent.right
+            anchors.left: vaultSidebar.right
             anchors.leftMargin: 24
             anchors.rightMargin: 24
             // Inset the scrolling area by the footer strip at both ends, so
@@ -814,6 +948,14 @@ ApplicationWindow {
                 iconColor: win.mutedColor
                 tooltip: "Save"
                 onClicked: backend.save()
+            }
+
+            FooterIconButton {
+                objectName: "vaultToggleButton"
+                iconName: "vault"
+                iconColor: backend.vaultVisible ? backend.themeAccent : win.mutedColor
+                tooltip: "Notes"
+                onClicked: backend.vaultVisible = !backend.vaultVisible
             }
 
             FooterIconButton {

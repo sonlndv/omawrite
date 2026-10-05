@@ -4,11 +4,13 @@
 #include <QPointer>
 #include <QByteArray>
 #include <QFileSystemWatcher>
+#include <QMap>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
+#include <QVector>
 #include <memory>
 
 class MarkdownHighlighter;
@@ -31,6 +33,10 @@ class Backend : public QObject {
     Q_PROPERTY(QString themeSelection READ themeSelection NOTIFY themeColorsChanged)
     Q_PROPERTY(QString editorFont READ editorFont WRITE setEditorFont NOTIFY editorFontChanged)
     Q_PROPERTY(QStringList availableFonts READ availableFonts CONSTANT)
+    Q_PROPERTY(QString vaultRoot READ vaultRoot NOTIFY vaultRootChanged)
+    Q_PROPERTY(bool vaultVisible READ vaultVisible WRITE setVaultVisible NOTIFY vaultVisibleChanged)
+    Q_PROPERTY(QVariantList vaultEntries READ vaultEntries NOTIFY vaultEntriesChanged)
+    Q_PROPERTY(QString currentVaultRelativePath READ currentVaultRelativePath NOTIFY fileUrlChanged)
 
 public:
     explicit Backend(QObject *parent = nullptr);
@@ -84,6 +90,20 @@ public:
     Q_INVOKABLE void saveWindowGeometry(int x, int y, int width, int height, bool maximized);
     Q_INVOKABLE void documentFontChanged();
 
+    QString vaultRoot() const { return m_vaultRoot; }
+    bool vaultVisible() const { return m_vaultVisible; }
+    void setVaultVisible(bool visible);
+    QVariantList vaultEntries() const { return m_vaultEntries; }
+    QString currentVaultRelativePath() const;
+
+    Q_INVOKABLE void chooseVaultDialog();
+    Q_INVOKABLE void setVaultRoot(const QUrl &url);
+    Q_INVOKABLE QUrl vaultFileUrl(const QString &relativePath) const;
+    Q_INVOKABLE bool createVaultNote(const QString &parentRelativePath, const QString &name);
+    Q_INVOKABLE bool createVaultFolder(const QString &parentRelativePath, const QString &name);
+    Q_INVOKABLE bool renameVaultEntry(const QString &relativePath, const QString &newName);
+    Q_INVOKABLE bool deleteVaultEntry(const QString &relativePath);
+
 signals:
     void fileUrlChanged();
     void modifiedChanged();
@@ -98,6 +118,10 @@ signals:
     void saveDialogRequested(const QUrl &suggestedUrl);
     void saveSucceeded();
     void externalChangeDetected(bool deleted, bool locallyModified);
+    void vaultRootChanged();
+    void vaultVisibleChanged();
+    void vaultEntriesChanged();
+    void vaultDialogRequested();
 
 private:
     void loadDocumentText(const QString &text);
@@ -120,6 +144,16 @@ private:
     void watchCurrentFile();
     void loadOmarchyTheme();
     void watchOmarchyTheme();
+    void setVaultRoot(const QString &path, bool persist);
+    void watchVaultDirectories();
+    void rescanVault();
+    void rebuildVaultEntries();
+    void syncVaultDirectory(const QString &absoluteDirPath);
+    void scanNewVaultDirectory(const QString &relativePath);
+    void removeVaultSubtree(const QString &relativePath);
+    QString absoluteVaultPath(const QString &relativePath) const;
+    QString relativeVaultPath(const QString &absolutePath) const;
+    bool isInsideVault(const QString &absolutePath) const;
 
     QUrl m_fileUrl;
     bool m_modified = false;
@@ -151,4 +185,11 @@ private:
     QString m_themeSelection;
     QString m_editorFont;
     QFileSystemWatcher m_themeWatcher;
+
+    QString m_vaultRoot;
+    bool m_vaultVisible = false;
+    QFileSystemWatcher m_vaultWatcher;
+    // relative path (posix separators) -> is directory
+    QMap<QString, bool> m_vaultPaths;
+    QVariantList m_vaultEntries;
 };

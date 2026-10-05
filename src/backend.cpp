@@ -4,6 +4,7 @@
 #include <QColor>
 #include <QCoreApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
@@ -15,6 +16,7 @@
 #include <QPrinter>
 #include <QQuickTextDocument>
 #include <QRegularExpression>
+#include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QJsonDocument>
@@ -31,8 +33,12 @@
 #include <QWindow>
 
 #include <algorithm>
+#include <functional>
 
 #include "markdownhighlighter.h"
+
+const QString vaultRootSetting = QStringLiteral("vault/root");
+const QString vaultVisibleSetting = QStringLiteral("vault/visible");
 
 constexpr qreal typoraLineHeightPercent = 140;
 const QString lastSaveDirectorySetting = QStringLiteral("file/lastSaveDirectory");
@@ -152,6 +158,16 @@ Backend::Backend(QObject *parent) : QObject(parent) {
         loadOmarchyTheme();
         watchOmarchyTheme();
     });
+
+    QSettings settings;
+    m_vaultVisible = settings.value(vaultVisibleSetting, false).toBool();
+    QString savedVault = settings.value(vaultRootSetting).toString();
+    if (savedVault.isEmpty())
+        savedVault = QDir::homePath() + QStringLiteral("/notes");
+    setVaultRoot(savedVault, /*persist=*/false);
+
+    connect(&m_vaultWatcher, &QFileSystemWatcher::directoryChanged, this,
+            [this](const QString &path) { syncVaultDirectory(path); });
 }
 
 Backend::~Backend() = default;
@@ -738,6 +754,280 @@ void Backend::watchOmarchyTheme() {
         m_themeWatcher.addPath(themeDir);
     if (QFile::exists(colorsPath))
         m_themeWatcher.addPath(colorsPath);
+}
+
+void Backend::setVaultVisible(bool visible) {
+    if (m_vaultVisible == visible)
+        return;
+
+    m_vaultVisible = visible;
+    QSettings().setValue(vaultVisibleSetting, visible);
+    emit vaultVisibleChanged();
+}
+
+QString Backend::currentVaultRelativePath() const {
+    if (!m_fileUrl.isLocalFile())
+        return {};
+    return relativeVaultPath(m_fileUrl.toLocalFile());
+}
+
+void Backend::chooseVaultDialog() {
+    emit vaultDialogRequested();
+}
+
+void Backend::setVaultRoot(const QUrl &url) {
+    if (!url.isLocalFile())
+        return;
+    setVaultRoot(url.toLocalFile(), /*persist=*/true);
+}
+
+void Backend::setVaultRoot(const QString &path, bool persist) {
+    const QString cleaned = QDir(path).absolutePath();
+    if (cleaned == m_vaultRoot)
+        return;
+
+    QDir().mkpath(cleaned);
+    m_vaultRoot = cleaned;
+    if (persist)
+        QSettings().setValue(vaultRootSetting, cleaned);
+
+    rescanVault();
+    watchVaultDirectories();
+    emit vaultRootChanged();
+}
+
+QUrl Backend::vaultFileUrl(const QString &relativePath) const {
+    return QUrl::fromLocalFile(absoluteVaultPath(relativePath));
+}
+
+QString Backend::absoluteVaultPath(const QString &relativePath) const {
+    if (relativePath.isEmpty())
+        return m_vaultRoot;
+    return QDir(m_vaultRoot).filePath(relativePath);
+}
+
+QString Backend::relativeVaultPath(const QString &absolutePath) const {
+    if (m_vaultRoot.isEmpty())
+        return {};
+    const QDir vaultDir(m_vaultRoot);
+    QString relative = vaultDir.relativeFilePath(absolutePath);
+    if (relative == QStringLiteral("."))
+        relative.clear();
+    if (relative.startsWith(QStringLiteral("..")) || QDir::isAbsolutePath(relative))
+        return {};
+    return relative;
+}
+
+bool Backend::isInsideVault(const QString &absolutePath) const {
+    return !relativeVaultPath(absolutePath).isEmpty();
+}
+
+void Backend::watchVaultDirectories() {
+    const QStringList watched = m_vaultWatcher.directories();
+    if (!watched.isEmpty())
+        m_vaultWatcher.removePaths(watched);
+
+    if (m_vaultRoot.isEmpty() || !QDir(m_vaultRoot).exists())
+        return;
+
+    m_vaultWatcher.addPath(m_vaultRoot);
+    QDirIterator it(m_vaultRoot, QDir::Dirs | QDir::NoDotAndDotDot,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext())
+        m_vaultWatcher.addPath(it.next());
+}
+
+void Backend::rescanVault() {
+    m_vaultPaths.clear();
+    if (!m_vaultRoot.isEmpty() && QDir(m_vaultRoot).exists()) {
+        QDirIterator it(m_vaultRoot, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot,
+                        QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            it.next();
+            const QFileInfo info = it.fileInfo();
+            const QString relative = relativeVaultPath(info.absoluteFilePath());
+            if (!relative.isEmpty())
+                m_vaultPaths.insert(relative, info.isDir());
+        }
+    }
+    rebuildVaultEntries();
+}
+
+// Re-reads one watched directory and folds in what changed: new files/folders
+// are added (and new folders get their own watch + are scanned for existing
+// children), removed entries are dropped along with any subtree beneath them.
+void Backend::syncVaultDirectory(const QString &absoluteDirPath) {
+    if (!isInsideVault(absoluteDirPath) && absoluteDirPath != m_vaultRoot)
+        return;
+
+    const QString dirRelative = relativeVaultPath(absoluteDirPath);
+    QDir dir(absoluteDirPath);
+    if (!dir.exists()) {
+        if (!dirRelative.isEmpty())
+            removeVaultSubtree(dirRelative);
+        rebuildVaultEntries();
+        return;
+    }
+
+    QSet<QString> onDisk;
+    const QFileInfoList children = dir.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QFileInfo &info : children) {
+        const QString relative = relativeVaultPath(info.absoluteFilePath());
+        if (relative.isEmpty())
+            continue;
+        onDisk.insert(relative);
+        if (!m_vaultPaths.contains(relative)) {
+            m_vaultPaths.insert(relative, info.isDir());
+            if (info.isDir())
+                scanNewVaultDirectory(relative);
+        }
+    }
+
+    // Drop entries that used to live directly under this directory but no
+    // longer exist on disk (handles deletions and renames-away).
+    const QString prefix = dirRelative.isEmpty() ? QString() : dirRelative + QLatin1Char('/');
+    const QStringList known = m_vaultPaths.keys();
+    for (const QString &relative : known) {
+        if (relative.indexOf(QLatin1Char('/'), prefix.length()) != -1)
+            continue; // not a direct child
+        if (!relative.startsWith(prefix) || relative == dirRelative)
+            continue;
+        if (!onDisk.contains(relative))
+            removeVaultSubtree(relative);
+    }
+
+    watchVaultDirectories();
+    rebuildVaultEntries();
+}
+
+void Backend::scanNewVaultDirectory(const QString &relativePath) {
+    const QString absolute = absoluteVaultPath(relativePath);
+    QDirIterator it(absolute, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        const QFileInfo info = it.fileInfo();
+        const QString relative = relativeVaultPath(info.absoluteFilePath());
+        if (!relative.isEmpty())
+            m_vaultPaths.insert(relative, info.isDir());
+    }
+}
+
+void Backend::removeVaultSubtree(const QString &relativePath) {
+    m_vaultPaths.remove(relativePath);
+    const QString prefix = relativePath + QLatin1Char('/');
+    const QStringList known = m_vaultPaths.keys();
+    for (const QString &relative : known) {
+        if (relative.startsWith(prefix))
+            m_vaultPaths.remove(relative);
+    }
+}
+
+void Backend::rebuildVaultEntries() {
+    QVariantList entries;
+    const QStringList relatives = m_vaultPaths.keys();
+    for (const QString &relative : relatives) {
+        const bool isDir = m_vaultPaths.value(relative);
+        const int slash = relative.lastIndexOf(QLatin1Char('/'));
+        const QString parent = slash >= 0 ? relative.left(slash) : QString();
+        const QString name = slash >= 0 ? relative.mid(slash + 1) : relative;
+        entries.append(QVariantMap{
+            {QStringLiteral("path"), relative},
+            {QStringLiteral("parent"), parent},
+            {QStringLiteral("name"), name},
+            {QStringLiteral("isDir"), isDir},
+        });
+    }
+    std::sort(entries.begin(), entries.end(), [](const QVariant &a, const QVariant &b) {
+        return a.toMap().value(QStringLiteral("path")).toString()
+            < b.toMap().value(QStringLiteral("path")).toString();
+    });
+    m_vaultEntries = entries;
+    emit vaultEntriesChanged();
+}
+
+bool Backend::createVaultNote(const QString &parentRelativePath, const QString &name) {
+    if (m_vaultRoot.isEmpty() || name.isEmpty())
+        return false;
+
+    QString fileName = name;
+    if (!fileName.endsWith(QStringLiteral(".md"), Qt::CaseInsensitive))
+        fileName += QStringLiteral(".md");
+
+    const QString parentAbsolute = absoluteVaultPath(parentRelativePath);
+    QDir().mkpath(parentAbsolute);
+    const QString targetAbsolute = QDir(parentAbsolute).filePath(fileName);
+    if (QFileInfo::exists(targetAbsolute))
+        return false;
+
+    QFile file(targetAbsolute);
+    if (!file.open(QIODevice::WriteOnly))
+        return false;
+    file.close();
+
+    syncVaultDirectory(parentAbsolute);
+    return true;
+}
+
+bool Backend::createVaultFolder(const QString &parentRelativePath, const QString &name) {
+    if (m_vaultRoot.isEmpty() || name.isEmpty())
+        return false;
+
+    const QString parentAbsolute = absoluteVaultPath(parentRelativePath);
+    const QString targetAbsolute = QDir(parentAbsolute).filePath(name);
+    if (QFileInfo::exists(targetAbsolute))
+        return false;
+    if (!QDir().mkpath(targetAbsolute))
+        return false;
+
+    syncVaultDirectory(parentAbsolute);
+    return true;
+}
+
+bool Backend::renameVaultEntry(const QString &relativePath, const QString &newName) {
+    if (m_vaultRoot.isEmpty() || relativePath.isEmpty() || newName.isEmpty())
+        return false;
+
+    const QString absolute = absoluteVaultPath(relativePath);
+    const QFileInfo info(absolute);
+    QString targetName = newName;
+    if (info.isFile() && !targetName.endsWith(QStringLiteral(".md"), Qt::CaseInsensitive)
+            && absolute.endsWith(QStringLiteral(".md"), Qt::CaseInsensitive))
+        targetName += QStringLiteral(".md");
+
+    const QString targetAbsolute = QDir(info.absolutePath()).filePath(targetName);
+    if (QFileInfo::exists(targetAbsolute))
+        return false;
+
+    const bool wasCurrentFile = m_fileUrl.isLocalFile()
+        && m_fileUrl.toLocalFile() == absolute;
+
+    if (!QFile::rename(absolute, targetAbsolute))
+        return false;
+
+    if (wasCurrentFile)
+        setFileUrl(QUrl::fromLocalFile(targetAbsolute));
+
+    syncVaultDirectory(info.absolutePath());
+    if (info.isDir())
+        watchVaultDirectories();
+    return true;
+}
+
+bool Backend::deleteVaultEntry(const QString &relativePath) {
+    if (m_vaultRoot.isEmpty() || relativePath.isEmpty())
+        return false;
+
+    const QString absolute = absoluteVaultPath(relativePath);
+    const QFileInfo info(absolute);
+    const bool ok = info.isDir() ? QDir(absolute).removeRecursively()
+                                 : QFile::remove(absolute);
+    if (!ok)
+        return false;
+
+    syncVaultDirectory(info.absolutePath());
+    watchVaultDirectories();
+    return true;
 }
 
 QUrl Backend::suggestedSaveUrl() const {
